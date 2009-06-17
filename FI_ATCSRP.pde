@@ -11,32 +11,42 @@
 // The following variables should be the only changes needed to get this code working. Be sure to have a 180 degree rotation
 // servo hooked up to your temperature control in any fassion you want as long as it can rotate from off/verylow to the highest setting.
 /* Start User Defined Variables */
+
+// Pin Connections
 int ThermocouplePin = 0;                     // Thermcouple Pin
 int ButtonOnePin = 6;                        // Button 1 Pin
 int ButtonTwoPin = 7;                        // Button 2 Pin
 int ServoPin = 9;                            // Servo Data Pin
+int LCDBacklightPin = 13;                    // LCD Backlight Pin
+
+// Servo Control
 int ServoLowPosition = 180;                  // Position the servo is in to have the heat at low or off
 int ServoHighPosition = 0;                   // Position the servo is in to have the heat at high
-int LCDBacklightPin = 13;                    // LCD Backlight Pin
+
+// Temperature Limits (all temperature are read in celcius)
+int MaxDeviceTemperature = 260;              // The maximum temperature that we will allow the device to get up to
+int MinDeviceTemperature = 100;              // The minimum temperature that we will allow the device to get to
+int ReflowTemperature = 255;                 // The temperature we expect the board to reflow at
+
+// LCD Screen
 boolean LCDBacklightOn = true;               // If we should turn the backlight on or not
 LiquidCrystal lcd(12, 11, 10, 5, 4, 3, 2);   // rw on pin 11, rs on pin 12, enable on pin 10, d4, d5, d6, d7 on pins 5, 4, 3, 2
+
 /* End User Defined Variables */
 
 
 Servo ControlServo;               // Servo to control the heat element temperature control.
 int Temperature = 0;              // Current temperature
-int LowestTemperature = 0;        // The lowest temperature we can achive with the board on. (this will be generated automatically).
+int LowestTemperature = 0;        // The lowest temperature we have achived with the board on. (this will be generated automatically).
 int ServoPosition = 0;            // Servo position storage
 int ButtonOneVal = 0;             // Button 1 state value
 int ButtonTwoVal = 0;             // Button 2 state value
 int PreviousButtonOneState = LOW; // Button 1 previous state
 int PreviousButtonTwoState = LOW; // Button 2 previous state
 int TemperatureIndex[20];         // An array to hold the temperature of the board in 10 servo movment intervals
-
 long ButtonOneTime = 0;	          // Time since the last button one press
 long ButtonTwoTime = 0;	          // Time since the last button two press
 long DebounceTime = 500;          // The debounce time
-
 boolean MenuDisplayed = false;    // If the menu is being displayed or not.
 boolean ProcessStarted = false;   // If we are reflowing or desoldering.
 boolean ServoReversed = false;    // If the user has the servo attached to the heating element backward or forwards (ie 0-180 or 180-0).
@@ -56,7 +66,7 @@ void setup() {
   if(LCDBacklightOn) digitalWrite(LCDBacklightPin, HIGH); // Turn on the LCD backlight
 
   // Display startup logo for 5 seconds, show the love.
-  PrintToLCD("FI-ATCSRP 0.01", "FisherInnovation"); 
+  PrintToLCD("FI-ATCSRP 0.02", "FisherInnovation"); 
   delay(5000);
   
   DisplayMenu(); // Display the main menu.
@@ -91,13 +101,16 @@ void PrintToLCD(char* LineOne, char* LineTwo) {
 
 
 /**
- * Converts the ThermocouplePin input to a temperature variable
+ * Converts the ThermocouplePin input to a temperature variable (Celsius).
  */
 int ReadThermocouple() {
-  Temperature = analogRead(ThermocouplePin);
-  int Celsius = ( 5.0 * Temperature * 100.0) / 1024.0;
-  //int Fahrenheit = (((Celsius * 9) / 5) + 32);
-  return Celsius;
+  return (5.0 * analogRead(ThermocouplePin) * 100.0) / 1024.0;
+  
+  // TODO: Test if the above return statement works as well as the longer code below.
+  //Temperature = analogRead(ThermocouplePin);
+  //int Celsius = (5.0 * Temperature * 100.0) / 1024.0;
+  // int Fahrenheit = (((Celsius * 9) / 5) + 32); // I never expect to use this - but I am sure someone will want to.
+  //return Celsius;
 }
 
 
@@ -240,7 +253,8 @@ boolean SystemConfig() {
   MoveServo(ServoLowPosition, 1000); // Return to the lowest temperature setting.
   StableTemp = false;                // Re-mark the temp as non-stable.
   
-  // Restabilze the temperature at the min setting.
+  // Restabilze the temperature at the min setting and make sure its within the given limits in the 
+  // user defined settings as MinDeviceTemperature.
   do {
     TempReading3 = TempReading2;
     TempReading2 = TempReading1;
@@ -248,7 +262,7 @@ boolean SystemConfig() {
     if(TempReading1 == TempReading2 == TempReading3) StableTemp = true;
     delay(1000); // Check the heat element temperature in 1 second intervals.
   }
-  while(!StableTemp);
+  while(!StableTemp && MinDeviceTemperature < TempReading1);
   
   return true;
 }
@@ -265,14 +279,14 @@ void SetupProcess(int ProcessID) {
   
   if(SystemConfig()) {
     PrintToLCD("Place Circuit", "On Plate Now"); 
-    delay(10000);                // Wait 10 seconds for the user to place the circuit on the plate.
+    delay(10000);                                  // Wait 10 seconds for the user to place the circuit on the plate.
    
     switch(ProcessID){
       case 0:  // Reflow
-        InitProcess(0, 120, 3, 200); // Heat up the board from lowest temp to 200C a +3C/s no more then 120 seconds
-        InitProcess(1, 20, 0, 260);  // Heat up the board from 200C to 260C in 20 seconds
-        InitProcess(2, 30, 0, 260);  // Reflow for 30 seconds at 260 degrees.
-        InitProcess(4, 30, 0, LowestTemperature);  // Cool down to base temp at -6C/s max.
+        InitProcess(0, 120, 3, 200);               // Heat up the board from lowest temp to 200C a +3C/s no more then 120 seconds
+        InitProcess(1, 20, 0, ReflowTemperature);  // Heat up the board from 200C to 260C in 20 seconds
+        InitProcess(2, 30, 0, ReflowTemperature);  // Reflow for 30 seconds at 260 degrees.
+        InitProcess(4, 30, -6, LowestTemperature); // Cool down to base temp at -6C/s max.
 	
         PrintToLCD("Reflow Done", "Remove Circuit");
       break;
@@ -307,9 +321,9 @@ void RestartProcess() {
   ProcessStarted = false;
   delay(10000);
 	
-  PrintToLCD("FI-ATCSRP 0.01", "FisherInnovation"); 
+  PrintToLCD("FI-ATCSRP 0.02", "FisherInnovation"); 
   delay(5000);
-  DisplayMenu(); // Display the main menu, start over again.
+  DisplayMenu();                                       // Display the main menu, start over again.
 }
 
 
@@ -346,12 +360,14 @@ void InitProcess(int ProcessID, int Duration, int MaxTemperatureChage, int Tempe
       
       // Display the proper process name on the LCD.
       switch(ProcessID) {
+        // TODO: Concat the strings and int's before adding to the LCD thus allowing us to use the PrintTOLCD method.
         case 0: lcd.print("Preheating Plate"); break;
         case 1: lcd.print("Heating Plate"); break;
         case 2: lcd.print("Reflowing"); break;
         case 3: lcd.print("Preheating Plate"); break;
       }
       
+      // TODO: Concat the strings and int's before adding to the LCD thus allowing us to use the PrintTOLCD method.
       lcd.setCursor(0,1);
       lcd.print("Temp:");
       lcd.print(CurrentTemperature);
@@ -373,6 +389,7 @@ void InitProcess(int ProcessID, int Duration, int MaxTemperatureChage, int Tempe
         else (!ServoReversed) ? MoveServo(PreviousServoPosition - ServoCompensation) : MoveServo(PreviousServoPosition + ServoCompensation);
       }
     
+      // TODO: Concat the strings and int's before adding to the LCD thus allowing us to use the PrintTOLCD method.
       lcd.clear();  
       lcd.setCursor(0,0);       
       lcd.print("Cooling Plate");
