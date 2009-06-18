@@ -10,6 +10,7 @@
 
 // The following variables should be the only changes needed to get this code working. Be sure to have a 180 degree rotation
 // servo hooked up to your temperature control in any fassion you want as long as it can rotate from off/verylow to the highest setting.
+
 /* Start User Defined Variables */
 
 // Pin Connections
@@ -25,7 +26,6 @@ int ServoHighPosition = 0;                   // Position the servo is in to have
 
 // Temperature Limits (all temperature are read in celcius)
 int MaxDeviceTemperature = 260;              // The maximum temperature that we will allow the device to get up to
-int MinDeviceTemperature = 100;              // The minimum temperature that we will allow the device to get to
 int ReflowTemperature = 255;                 // The temperature we expect the board to reflow at
 
 // LCD Screen
@@ -56,20 +56,17 @@ boolean ServoReversed = false;    // If the user has the servo attached to the h
  * Setup Program
  */
 void setup() {
-  Serial.begin(9600); // Output for serial debugging
+  Serial.begin(9600);                                      // Output for serial debugging
 
   // Setup i/o pins.
   pinMode(ButtonOnePin, INPUT);
   pinMode(ButtonTwoPin, INPUT);
   pinMode(LCDBacklightPin, OUTPUT);
 
-  if(LCDBacklightOn) digitalWrite(LCDBacklightPin, HIGH); // Turn on the LCD backlight
+  if(LCDBacklightOn) digitalWrite(LCDBacklightPin, HIGH);  // Turn on the LCD backlight
 
-  // Display startup logo for 5 seconds, show the love.
-  PrintToLCD("FI-ATCSRP 0.02", "FisherInnovation"); 
-  delay(5000);
-  
-  DisplayMenu(); // Display the main menu.
+  DisplayStartupScreen(5000);                              // Display startup screen for 5 seconds.
+  DisplayMenu();                                           // Display the main menu.
 }
 
 
@@ -103,16 +100,16 @@ void PrintToLCD(char* LineOne, char* LineTwo) {
 /**
  * Converts the ThermocouplePin input to a temperature variable (Celsius).
  */
-int ReadThermocouple() {
-  return (5.0 * analogRead(ThermocouplePin) * 100.0) / 1024.0;
-  
-  // TODO: Test if the above return statement works as well as the longer code below.
-  //Temperature = analogRead(ThermocouplePin);
-  //int Celsius = (5.0 * Temperature * 100.0) / 1024.0;
-  // int Fahrenheit = (((Celsius * 9) / 5) + 32); // I never expect to use this - but I am sure someone will want to.
-  //return Celsius;
-}
+int ReadThermocouple() { return (5.0 * analogRead(ThermocouplePin) * 100.0) / 1024.0; }
 
+
+/**
+ * Displays the main startup screen.
+ */
+void DisplayStartupScreen(int DelayTime) { 
+  PrintToLCD("FI-ATCSRP 0.02", "FisherInnovation");
+  delay(DelayTime);
+}
 
 /**
  * Move the servo to a given position in a given amount of time.
@@ -181,6 +178,10 @@ int CalculateCompensation(int TimeLeft, int PreviousTemperature, int CurrentTemp
  * Check if a button has been pressed and returns the button number
  * if it was pressed. Also check for debouncing to avoid button presses
  * when no buttons have actually been pressed.
+ *
+ * @return  0 = No Button Press
+ *          1 = Button 1 Press
+ *          2 = Button 2 Press
  */
 int CheckButtons() {
   ButtonOneVal = digitalRead(ButtonOnePin); // Check button one
@@ -196,6 +197,8 @@ int CheckButtons() {
     return 2;
   }
   PreviousButtonTwoState = ButtonTwoVal;
+  
+  return 0;
 }
 
 
@@ -213,7 +216,7 @@ void DisplayMenu() {
  * if it fails config tests.
  */
 boolean SystemConfig() {
-  PrintToLCD("System Config", "Please Wait...");
+  PrintToLCD("System Config...", "Please Wait...");
 
   // Check if the servo is setup to spin forward or backwards to get hot, make it public.
   (ServoLowPosition < ServoHighPosition) ? ServoReversed = false : ServoReversed = true;
@@ -242,7 +245,20 @@ boolean SystemConfig() {
         TemperatureIndex[i] = TempReading1; // Store stable temp reading in array.
         if(i == 0) LowestTemperature = TempReading1; // Store the inital temp as the lowest temp.
       } else {
-        delay(2000); // If the reading do not match, wait 2 seconds for the temp to settle and test again.
+        // Display the temperature as we wait for another check.
+        for(int n = 0; n < 20; n++) {
+         lcd.setCursor(0,1);
+         lcd.print("P:"); // Position
+         int CurrentPosition = ControlServo.read();
+         lcd.print(CurrentPosition);
+         lcd.print(" T:"); // Temperature
+         TempReading1 = ReadThermocouple();
+         lcd.print(TempReading1);
+         lcd.print(char(223));
+         lcd.print("C      ");
+         
+         delay(500); 
+        }
       }
     }
     while(!StableTemp);
@@ -260,9 +276,16 @@ boolean SystemConfig() {
     TempReading2 = TempReading1;
     TempReading1 = ReadThermocouple(); 
     if(TempReading1 == TempReading2 == TempReading3) StableTemp = true;
-    delay(1000); // Check the heat element temperature in 1 second intervals.
+    
+    lcd.setCursor(0,1);
+    lcd.print("T:"); // Temperature
+    lcd.print(TempReading1);
+    lcd.print(char(223));
+    lcd.print("C           ");  // The extra spacing clears remaining characters.
+    
+    delay(1000); // Check the heat element temperature in 2 second intervals.
   }
-  while(!StableTemp && MinDeviceTemperature < TempReading1);
+  while(!StableTemp);//&& MinDeviceTemperature < TempReading1);
   
   return true;
 }
@@ -321,9 +344,8 @@ void RestartProcess() {
   ProcessStarted = false;
   delay(10000);
 	
-  PrintToLCD("FI-ATCSRP 0.02", "FisherInnovation"); 
-  delay(5000);
-  DisplayMenu();                                       // Display the main menu, start over again.
+  DisplayStartupScreen(5000);
+  DisplayMenu();                // Display the main menu, start over again.
 }
 
 
