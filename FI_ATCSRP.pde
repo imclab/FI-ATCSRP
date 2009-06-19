@@ -6,6 +6,7 @@
 
 #include <LiquidCrystal.h>
 #include <Servo.h>
+#include <EEPROM.h>
 
 
 // The following variables should be the only changes needed to get this code working. Be sure to have a 180 degree rotation
@@ -44,12 +45,17 @@ int ButtonTwoVal = 0;             // Button 2 state value
 int PreviousButtonOneState = LOW; // Button 1 previous state
 int PreviousButtonTwoState = LOW; // Button 2 previous state
 int TemperatureIndex[20];         // An array to hold the temperature of the board in 10 servo movment intervals
+int EEPROMAddress = 0;            // What byte to start reading the EEPROM
+int ReflowCounter = 0;            // So the board can remember how many times its ran the reflow cycle
+int DesolderCounter = 0;          // So the board can remember how many times its ran the desolder cycle
+int EEPROMCounter = 0;          // So the board can remember how many times logged EEPROM data
 long ButtonOneTime = 0;	          // Time since the last button one press
 long ButtonTwoTime = 0;	          // Time since the last button two press
 long DebounceTime = 500;          // The debounce time
 boolean MenuDisplayed = false;    // If the menu is being displayed or not.
 boolean ProcessStarted = false;   // If we are reflowing or desoldering.
 boolean ServoReversed = false;    // If the user has the servo attached to the heating element backward or forwards (ie 0-180 or 180-0).
+byte EEPROMValue;                 // A place to store the EEPROM data.
 
 
 /**
@@ -79,6 +85,75 @@ void loop() {
     if(CheckButtons() == 1) SetupProcess(0); // Reflow
     if(CheckButtons() == 2) SetupProcess(1); // Desolder
   }
+}
+
+
+/**
+ * Read the EEPROM for stored data on the chip.
+ *
+ *  NOTE: EEPROM byte data is saved as follows:
+ *      0 - 19 : Temperature reading for each 10 degree interval of servo rotation on the heating element.
+ *          20 : The count of total reflow cycles the board has run
+ *          21 : The count of total desolder cycles the board has run
+ *          22 : EEPROM write cycle counter (Life == 100000 write/erase cycles)
+ *
+ * @return  boolean  If there is data already on the system from a previous config cycle.
+ */
+void ReadEEPROM() {
+  // Import the logged temperature data to our public array.
+  for(int i = 0; i <= 19; i++) {
+    TemperatureIndex[i] = EEPROM.read(i);
+  }
+  
+  // Store counters.
+  ReflowCounter = EEPROM.read(20);
+  DesolderCounter = EEPROM.read(21);
+  EEPROMCounter = EEPROM.read(22);
+}
+
+
+/**
+ * Checks the EEPROM for any previously logged data.
+ */
+boolean CheckEEPROM() {
+  if(EEPROM.read(0) > 0) return true;
+  else return false;
+}
+
+
+/**
+ * Writes data to the EEPROM for persistant data storage.
+ *
+ *  NOTE: EEPROM byte data is saved as follows:
+ *      0 - 19 : Temperature reading for each 10 degree interval of servo rotation on the heating element.
+ *          20 : The count of total reflow cycles the board has run
+ *          21 : The count of total desolder cycles the board has run
+ *          22 : EEPROM write cycle counter (Life == 100000 write/erase cycles)
+ *
+ * @param    TemperatureArray    The array of 0 - 19 storing temperature values at every 10 degrees of servo rotation
+ * @param    ProcessID           0 = Reflow, 1 = Desolder
+ */
+void WriteEEPROM(int* TemperatureArray, int ProcessID) {
+  for (int i = 0; i <= 19; i++) {
+    // Run a check to see if we are logging valid data.
+    if(TemperatureArray[i] > 0) EEPROM.write(i, TemperatureArray[i]); // Write the temperature values.
+    else EEPROM.write(i, 0);                                         // Writes a 0 which we will pickup a invalid on import.
+  }
+  
+  // Log the process ID counters
+  switch(ProcessID) {
+    case 0: // reflow
+      ReflowCounter++; 
+    break; 
+    
+    case 1: // desolder
+      DesolderCounter++;
+    break;
+  }
+  
+  EEPROM.write(20, ReflowCounter);
+  EEPROM.write(21, DesolderCounter);
+  EEPROM.write(22, EEPROMCounter++);  // Log that we made a EPEPROM write.
 }
 
 
@@ -214,8 +289,10 @@ void DisplayMenu() {
 /**
  * Test the system for faults return true if config is ok false
  * if it fails config tests.
+ *
+ * @param    ProcessID    0 = Relfow, 1 = Desolder
  */
-boolean SystemConfig() {
+boolean SystemConfig(int ProcessID) {
   PrintToLCD("System Config...", "Please Wait...");
 
   // Check if the servo is setup to spin forward or backwards to get hot, make it public.
@@ -266,6 +343,9 @@ boolean SystemConfig() {
     (!ServoReversed)? MoveServo(ControlServo.read() + 10) : MoveServo(ControlServo.read() - 10); // Move the servo 10 spots and wait.
   }
     
+  // Log this data into persistant memory so that we won't have to run the config on every reflow/desolder cycle.
+  WriteEEPROM(TemperatureIndex, ProcessID);
+    
   MoveServo(ServoLowPosition, 1000); // Return to the lowest temperature setting.
   StableTemp = false;                // Re-mark the temp as non-stable.
   
@@ -278,14 +358,14 @@ boolean SystemConfig() {
     if(TempReading1 == TempReading2 == TempReading3) StableTemp = true;
     
     lcd.setCursor(0,1);
-    lcd.print("T:"); // Temperature
+    lcd.print("T:");            // Temperature
     lcd.print(TempReading1);
     lcd.print(char(223));
     lcd.print("C           ");  // The extra spacing clears remaining characters.
     
-    delay(1000); // Check the heat element temperature in 2 second intervals.
+    delay(1000);                // Check the heat element temperature in 2 second intervals.
   }
-  while(!StableTemp);//&& MinDeviceTemperature < TempReading1);
+  while(!StableTemp);
   
   return true;
 }
@@ -297,10 +377,16 @@ boolean SystemConfig() {
  * @param    ProcessID  The ID of the process to setup (0 = Reflow, 1 = Desolder).
  */
 void SetupProcess(int ProcessID) {
+  boolean ConfigStatus;
   ProcessStarted = true;
   MenuDisplayed = false;
   
-  if(SystemConfig()) {
+  // Check to see if the device has been configured yet. If it has we will just use the data from
+  // the EEPROM. TODO: Find a way so the user can override this and run another config cycle.
+  if(!CheckEEPROM()) ConfigStatus = SystemConfig(ProcessID);
+  else ReadEEPROM();
+  
+  if(ConfigStatus) {
     PrintToLCD("Place Circuit", "On Plate Now"); 
     delay(10000);                                  // Wait 10 seconds for the user to place the circuit on the plate.
    
